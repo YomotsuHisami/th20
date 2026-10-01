@@ -25,7 +25,7 @@ const entry=game==='th08'?'th08-modern.html':game+'.html';
 // files themselves arrive through the launcher's requiredShared supply.
 const fontNames=game==='th20'?[]:game==='th08'?['msgothic.ttc','blend.bin','cp932.bin']:['blend.bin','codepages.bin'];
 const thprac=build.features?.thprac===true;
-const runtimeNames=['shell.mjs','eagler-host.mjs',...(thprac?['practice.mjs','practice-config.mjs','practice-sections.mjs']:[])];
+const runtimeNames=['shell.mjs','directory-keyboard.mjs','eagler-host.mjs',...(thprac?['practice.mjs','practice-config.mjs','practice-sections.mjs']:[])];
 const names=[entry,'manifest.json',...runtimeNames,'motion-replay.mjs',game+'-sdl.mjs',game+'-sdl.wasm','resources.json',...fontNames.map(n=>'fonts/'+n)];
 const allowed=new Set([...names,'runtime-files.json']);
 function walk(dir){return existsSync(dir)?readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(resolve(dir,e.name)):[resolve(dir,e.name)]):[];}
