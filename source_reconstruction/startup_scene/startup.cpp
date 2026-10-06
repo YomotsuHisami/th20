@@ -34,6 +34,26 @@ bool file_exists(const char* name) {
     return std::filesystem::exists(name);
 #endif
 }
+int finish_loading() {
+    audio::bind_game_services();auto& audio=pe::thread_registry;
+    if(audio.load_formats("../../bgm/thbgm.fmt")!=0) runtime::log_printf(pe::log_buffer,data::audio_format_error);
+    audio.initialize(pe::window_state.window,*audio.context);audio.apply_configuration();
+    if(file_exists("thbgm.dat")) {
+        if(!(pe::graphics_state.configuration.flags&0x10)) audio.start_stream("thbgm.dat");
+        else strcpy_s(audio.music_file,0x20,"thbgm.dat");
+    }
+    initialize_shared_scene_resources();
+#ifdef TH_SDL3
+    while(!sprite::animation_files_ready(*pe::sprite_controller,pe::graphics_state.event_flags))
+        pw::unrecovered::pump_background_jobs(*pe::sprite_controller);
+#else
+    while(!sprite::animation_files_ready(*pe::sprite_controller,pe::graphics_state.event_flags)) Sleep(1);
+#endif
+    scheduler::enable(*loading_scene->update_node);
+    auto* statistics=static_cast<pw::FrameStatistics*>(pw::unrecovered::scheduler_object_005c4a00);
+    statistics->end_times[0]=std::chrono::steady_clock::now().time_since_epoch().count();
+    return 0;
+}
 }
 LoadingScene::LoadingScene() {
     field_20=0;sprite::construct_animation(animation);animation_handle=0;
@@ -67,6 +87,14 @@ int LoadingScene::register_callbacks() {
 }
 int LoadingScene::update() {
     if(flags&2) {
+#ifdef TH_SDL3
+        // The inline browser loader used to finish before its first draw.
+        // Give the newly spawned signature/text one completed frame, then
+        // prepare everything else and enter Title as soon as it is ready.
+        if(pe::graphics_state.field_0b0c==3)return 1;
+        if(signature_ready!=2||text_ready!=2||draw_frames<2)return 1;
+        finish_loading();
+#endif
         pw::acquire_render_surfaces(pe::graphics_state);pe::window_state.input_latch=1;
         text::renderer->enable_callbacks();pe::graphics_state.event_flags&=~0x200u;
         pe::graphics_state.field_0b0c=4;flags&=~2u;
@@ -109,27 +137,15 @@ int load_worker() {
         if(pe::graphics_state.surface_animation) {
             if(text::create_renderer()) {
                 std::atomic_ref(self.text_ready).store(1,std::memory_order_release);
-                audio::bind_game_services();auto& audio=pe::thread_registry;
-                if(audio.load_formats("../../bgm/thbgm.fmt")!=0) runtime::log_printf(pe::log_buffer,data::audio_format_error);
-                audio.initialize(pe::window_state.window,*audio.context);audio.apply_configuration();
-                if(file_exists("thbgm.dat")) {
-                    if(!(pe::graphics_state.configuration.flags&0x10)) audio.start_stream("thbgm.dat");
-                    else strcpy_s(audio.music_file,0x20,"thbgm.dat");
-                }
-                initialize_shared_scene_resources();
 #ifdef TH_SDL3
-                // No loader thread exists on the browser runtime: the worker
-                // body IS the main thread, so pump the per-frame background
-                // jobs ourselves until the staged files are ready.
+                // Only the two startup banks must be ready before the first
+                // visible frame. Shared/game resources are prepared afterwards.
                 while(!sprite::animation_files_ready(*pe::sprite_controller,pe::graphics_state.event_flags))
                     pw::unrecovered::pump_background_jobs(*pe::sprite_controller);
+                scheduler::enable(*self.update_node);return 0;
 #else
-                while(!sprite::animation_files_ready(*pe::sprite_controller,pe::graphics_state.event_flags)) Sleep(1);
+                return finish_loading();
 #endif
-                scheduler::enable(*self.update_node);
-                auto* statistics=static_cast<pw::FrameStatistics*>(pw::unrecovered::scheduler_object_005c4a00);
-                statistics->end_times[0]=std::chrono::steady_clock::now().time_since_epoch().count(); //4515e0(slot0)
-                return 0;
             }
             runtime::log_printf(pe::log_buffer,data::text_renderer_error);
         }
