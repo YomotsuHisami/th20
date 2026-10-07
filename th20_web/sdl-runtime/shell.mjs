@@ -1,6 +1,7 @@
 // Platform shell for the upstream eagler-touhou/1 Launcher contract.
 // Game construction, input, timing, rendering, text and sound belong to C++.
 import {createBrowserKeyboard} from './directory-keyboard.mjs';
+import {installStartupBranding} from './startup-branding.mjs';
 import createModule from './th20-sdl.mjs';
 import {bindOutsideTouches} from './eagler-host.mjs';
 import {normalizeOptions,applyTouchOptions,touchControls,suspendRuntimeAudio,resumeRuntimeAudio,directTouch,ensureSharedFontAlias,installResources as installHostResources,observeMusicWrites,mountManagedData,isSupersededRuntimeError} from './eagler-host.mjs';
@@ -78,8 +79,9 @@ async function resumeForegroundAudio(forcePause=false){
  return resumeRuntimeAudio(Module,core,()=>!!core&&launched&&!document.hidden);
 }
 async function stop(){if(closing)return;closing=true;clearKeyboard();try{core.sdl_loop_stop();await save();core.sdl_game_close();await sync(false);app=0;launched=false;emit('exit',{code:0,status:'success'});}finally{closing=false;}}
-function launch(){
+async function launch(){
  if(launched)return;clearKeyboard();
+ await installStartupBranding(Module,{game,builtAt:(await(await fetch('./manifest.json')).json()).builtAt});
  ensureSharedFontAlias(Module,language);
  const mode=Module.touhouMusicMode||'none';music=mode!=='none';core.sdl_ogg_decode_mode?.(options.oggDecodeMode==='full');core.sdl_music_enabled(music);app=core.sdl_game_open(language==='chs'?1:0,Date.now()&65535);if(!app)throw Error('C++ game initialization failed');
  applyOptions();launched=true;first=false;lastPresented=0;lastHealth=performance.now();lastFrame=0;frames=0;maxGap=0;
@@ -95,7 +97,7 @@ async function command(message){
  case 'touch-cancel':cancelTouches();return {};
  case 'direct-touch':directTouch(core,canvas,message,{width:innerWidth,height:innerHeight});return {};
  case 'touch-controls':touchControls(core,options,message);return {};
- case 'launch':launch();return {};
+ case 'launch':await launch();return {};
  case 'sync':await save();return {};
  case 'list':{const files=[];for(const dir of ['', '/replay'])for(const name of Module.FS.readdir(root()+dir)){const path=(dir+'/'+name).replace(/^\//,'');try{relativeSave(path);}catch{continue;}const full=root()+'/'+path,s=Module.FS.stat(full);if(Module.FS.isFile(s.mode)){const bytes=Module.FS.readFile(full);files.push({path,size:s.size});}}return {files};}
  case 'read':{const path=relativeSave(message.path);return {bytes:Array.from(Module.FS.readFile(root()+'/'+path))};}

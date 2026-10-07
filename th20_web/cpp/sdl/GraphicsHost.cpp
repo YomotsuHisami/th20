@@ -5,6 +5,7 @@
 // objects exist in this build.
 #include "../platform/Graphics.hpp"
 #include "Renderer.hpp"
+#include "StartupBranding.hpp"
 #include <deque>
 #include <array>
 #include <map>
@@ -27,7 +28,7 @@ struct Resource {
 };
 struct Host {
     std::map<u32, Resource> resources;
-    u32 next = 1;
+    u32 next = 1, startup_credit = 0;
     u32 density = 1;
     std::deque<Texture> textures;       // deque: Texture* stays stable for the game
     std::unique_ptr<Renderer> gpu;
@@ -67,6 +68,12 @@ struct Host {
 } host;
 }
 
+extern "C" void sdl_startup_branding_draw(unsigned tint){
+ if(!host.startup_credit){auto pixels=startup_branding::load();if(pixels.empty())return;
+  host.startup_credit=host.image(1280,960,PixelFormat::Bgra8);auto& resource=host.get(host.startup_credit);
+  resource.bytes=std::move(pixels);resource.s.data=resource.bytes.data();}
+ startup_branding::draw(*host.gpu,host.startup_credit,host.back,tint);
+}
 namespace th20::web {
 PipelineState& GraphicsDevice::pipeline() { return host.gpu->pipeline(); }
 

@@ -21,6 +21,10 @@ namespace th20::source::startup {
 namespace pe=program_entry;
 namespace pw=platform_window;
 LoadingScene* loading_scene=nullptr;
+#ifdef TH_SDL3
+static std::chrono::steady_clock::time_point startup_image_at;
+static bool startup_resources_prepared=false;
+#endif
 namespace {
 int __cdecl update_callback(void* object) {return static_cast<LoadingScene*>(object)->update();} //4d85a0
 int __cdecl draw_callback(void* object) {return static_cast<LoadingScene*>(object)->draw();} //4d85b0
@@ -59,6 +63,9 @@ LoadingScene::LoadingScene() {
     field_20=0;sprite::construct_animation(animation);animation_handle=0;
     signature_file=nullptr;signature_ready=0;text_ready=0;draw_frames=0;
     loading_scene=this;flags|=2;
+#ifdef TH_SDL3
+    startup_resources_prepared=false;
+#endif
 }
 LoadingScene::~LoadingScene() {
     runtime::join_worker(worker);
@@ -93,7 +100,8 @@ int LoadingScene::update() {
         // prepare everything else and enter Title as soon as it is ready.
         if(pe::graphics_state.field_0b0c==3)return 1;
         if(signature_ready!=2||text_ready!=2||draw_frames<2)return 1;
-        finish_loading();
+        if(!startup_resources_prepared){finish_loading();startup_resources_prepared=true;}
+        if(std::chrono::steady_clock::now()-startup_image_at<std::chrono::seconds(2))return 1;
 #endif
         pw::acquire_render_surfaces(pe::graphics_state);pe::window_state.input_latch=1;
         text::renderer->enable_callbacks();pe::graphics_state.event_flags&=~0x200u;
@@ -112,6 +120,9 @@ int LoadingScene::draw() {
         text::renderer->create_loading_text(data::text_x,data::text_y);
         std::atomic_ref(text_ready).fetch_add(1,std::memory_order_release);
     }
+#ifdef TH_SDL3
+    if(draw_frames==0)startup_image_at=std::chrono::steady_clock::now();
+#endif
     ++draw_frames;return 1;
 }
 LoadingScene* create_loading_scene() {
