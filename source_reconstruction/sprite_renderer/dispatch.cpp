@@ -3,6 +3,11 @@
 #include "../runtime_core/runtime_core.hpp"
 #ifdef TH_SDL3
 #include "../platform_window/graphics_callbacks.hpp"
+#include "../startup_scene/startup.hpp"
+#include "sprite.hpp"
+#include "../../../th20_web/cpp/sdl/HitboxDisplay.hpp"
+#include "quad.hpp"
+extern "C" void sdl_startup_branding_draw(unsigned alpha);
 #endif
 namespace th20::source::sprite {
 std::uint32_t select_layer_animations(AnimationList* group,std::int32_t layer,bool secondary) noexcept {
@@ -54,11 +59,21 @@ void configure_animation_layer(Controller& c,std::int32_t layer,std::int32_t gro
 }
 void draw_selected_animations(Controller& c,AnimationList* group) {
     for(scheduler::Iterator it(reinterpret_cast<scheduler::Link*>(group[2].sentinel.next));it.current;it.advance()){
-        draw_animation(c,*reinterpret_cast<Animation*>(it.current->value));++c.fields_c8[4];
+        auto& animation=*reinterpret_cast<Animation*>(it.current->value);
+        draw_animation(c,animation);++c.fields_c8[4];
+#ifdef TH_SDL3
+        if(startup::loading_scene&&animation.handle==startup::loading_scene->animation_handle&&(animation.base.flags[1]&1)){
+            flush_textured_quads(c,draw_environment::device());sdl_startup_branding_draw(animation.base.field_490);
+        }
+#endif
     }
 }
 std::int32_t draw_animation_layer(Controller& c,std::int32_t layer) {
     std::lock_guard lock(runtime::shared_locks().slot(9));
-    for(bool secondary:{false,true})if(select_layer_animations(c.lists,layer,secondary)){configure_animation_layer(c,layer,0);draw_selected_animations(dispatch_environment::controller(),c.lists);}return 1;
+    for(bool secondary:{false,true})if(select_layer_animations(c.lists,layer,secondary)){configure_animation_layer(c,layer,0);draw_selected_animations(dispatch_environment::controller(),c.lists);}
+#ifdef TH_SDL3
+    web::draw_hitbox_layer(c,layer);
+#endif
+    return 1;
 }
 }

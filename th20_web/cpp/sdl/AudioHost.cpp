@@ -16,6 +16,8 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "../../../portable/sdl/third_party/miniaudio.h"
 #include "../platform/Audio.hpp"
+#include <eagler/audio/WebSfx.hpp>
+namespace web_sfx = eagler::audio::web_sfx;
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cmath>
@@ -36,7 +38,7 @@ struct Host {
     ma_engine engine{};
     SDL_AudioStream* stream = nullptr;
     bool ready = false, paused = false, refilling = true, primed = false;
-    static constexpr int chunk = 1024, low = 4096, high = 6144;
+    static constexpr int chunk = 1024, low = 2048, high = 3072;
     std::uint64_t clock_ms = 1000;
     std::map<std::uint32_t, bool> events;
     std::uint32_t next_event = 1;
@@ -51,6 +53,9 @@ std::uint32_t block_align(const SoundBuffer& b) { return std::max(1u, std::uint3
 
 void controls(SoundBuffer& b) {
     if (!b.voice_ready) return;
+    web_sfx::volume(&b, std::pow(10.f, float(b.volume) / 2000.f));
+    web_sfx::pan(&b, b.pan >= 0 ? 1.f - std::pow(10.f, -float(b.pan) / 2000.f)
+                               : std::pow(10.f, float(b.pan) / 2000.f) - 1.f);
     auto& sound = *static_cast<ma_sound*>(b.voice);
     ma_sound_set_volume(&sound, std::pow(10.f, float(b.volume) / 2000.f));
     ma_sound_set_pan_mode(&sound, ma_pan_mode_balance);
@@ -76,17 +81,25 @@ bool prepare_voice(SoundBuffer& b) {
     if (ma_sound_init_from_data_source(&host.engine, &data, MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, &sound) != MA_SUCCESS)
         return false;
     b.voice_ready = true;
+    // Mutable music rings retain miniaudio and their original notifications.
+    if (b.notifications.empty())
+        web_sfx::upload(&b, b.pcm->data(), b.length / align, channels, word32(b.format + 4), bits == 8 ? 2 : 1);
     controls(b);
     return true;
 }
 
 void discard_voice(SoundBuffer& b) {
+    web_sfx::erase(&b);
     if (b.voice_ready) { ma_sound_uninit(static_cast<ma_sound*>(b.voice)); b.voice_ready = false; }
     if (b.data_ready) { ma_audio_buffer_uninit(static_cast<ma_audio_buffer*>(b.data_source)); b.data_ready = false; }
 }
 
 std::uint32_t position_of(SoundBuffer& b) {
     if (!b.playing) return b.cursor;
+    if (web_sfx::contains(&b)) {
+        if (!web_sfx::playing(&b)) { b.playing = false; return b.cursor = 0; }
+        return std::uint32_t(web_sfx::cursor(&b) * block_align(b) % b.length);
+    }
     if (b.voice_ready) {
         ma_uint64 frame = 0;
         ma_sound_get_cursor_in_pcm_frames(static_cast<ma_sound*>(b.voice), &frame);
@@ -108,6 +121,7 @@ SoundBuffer::~SoundBuffer() {
 }
 
 HRESULT SoundBuffer::GetStatus(DWORD* out) {
+    if (web_sfx::contains(this)) position_of(*this);
     if (out) *out = playing ? (DSBSTATUS_PLAYING | (loop ? DSBSTATUS_LOOPING : 0u)) : 0u;
     return S_OK;
 }
@@ -123,7 +137,16 @@ HRESULT SoundBuffer::Lock(DWORD offset, DWORD bytes, void** first, DWORD* first_
     if (second_size) *second_size = wanted - head;
     return S_OK;
 }
-HRESULT SoundBuffer::Unlock(void*, DWORD, void*, DWORD) { return S_OK; }
+HRESULT SoundBuffer::Unlock(void*, DWORD, void*, DWORD) {
+    if (web_sfx::contains(this)) {
+        const bool active = web_sfx::playing(this);
+        const auto frame = web_sfx::cursor(this);
+        web_sfx::upload(this, pcm->data(), length / block_align(*this), word16(format + 2), word32(format + 4), word16(format + 14) == 8 ? 2 : 1);
+        controls(*this);web_sfx::seek(this, frame, word32(format + 4));
+        if (active) web_sfx::play(this, loop);
+    }
+    return S_OK;
+}
 HRESULT SoundBuffer::Play(DWORD, DWORD, DWORD play_flags) {
     if (!prepare_voice(*this)) return E_FAIL;
     if (playing) cursor = position_of(*this);
@@ -135,18 +158,21 @@ HRESULT SoundBuffer::Play(DWORD, DWORD, DWORD play_flags) {
         auto& sound = *static_cast<ma_sound*>(voice);
         ma_sound_set_looping(&sound, loop);
         ma_sound_seek_to_pcm_frame(&sound, cursor / block_align(*this));
-        ma_sound_start(&sound);
+        web_sfx::seek(this, cursor / block_align(*this), word32(format + 4));
+        if (!web_sfx::play(this, loop)) ma_sound_start(&sound);
     }
     return S_OK;
 }
 HRESULT SoundBuffer::Stop() {
     cursor = position_of(*this);
     playing = false;
+    web_sfx::stop(this);
     if (voice_ready) ma_sound_stop(static_cast<ma_sound*>(voice));
     return S_OK;
 }
 HRESULT SoundBuffer::SetCurrentPosition(DWORD byte_position) {
     cursor = byte_position % length;
+    web_sfx::seek(this, cursor / block_align(*this), word32(format + 4));
     started_ms = host.clock_ms;
     if (voice_ready) ma_sound_seek_to_pcm_frame(static_cast<ma_sound*>(voice), cursor / block_align(*this));
     return S_OK;
@@ -166,6 +192,7 @@ HRESULT SoundBuffer::SetFormat(const WAVEFORMATEX* wfx) {
     return S_OK;
 }
 HRESULT SoundBuffer::SetNotificationPositions(DWORD count, const DSBPOSITIONNOTIFY* positions) {
+    if (count) web_sfx::erase(this);
     notifications.clear();
     for (std::uint32_t i = 0; i < count; ++i)
         notifications.emplace_back(positions[i].dwOffset,
@@ -196,13 +223,15 @@ bool Device::initialize(std::uint32_t, std::uint32_t rate, std::uint32_t) {
     // short gain ramp to the game's own fades.
     cfg.defaultVolumeSmoothTimeInPCMFrames = 0;
     if (ma_engine_init(&cfg, &host.engine) != MA_SUCCESS) { host.error = 1; return false; }
-    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "2048");
+    // SDL Emscripten doubles this request to a 2048-frame output block.
+    SDL_SetHint(SDL_HINT_AUDIO_DEVICE_SAMPLE_FRAMES, "1024");
     SDL_AudioSpec spec{SDL_AUDIO_F32, 2, static_cast<int>(std::min<std::uint32_t>(rate, 44100u))};
     if (SDL_InitSubSystem(SDL_INIT_AUDIO))
         host.stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
     if (!host.stream) { ma_engine_uninit(&host.engine); host.error = 2; return false; }
     host.ready = true;
     host.paused = false;
+    web_sfx::suspend(false);
     SDL_ResumeAudioStreamDevice(host.stream);
     return true;
 }
@@ -306,19 +335,21 @@ void pump() {
     if (queued >= Host::high) { host.refilling = false; host.primed = true; return; }
     for (int block = 0; block < (Host::high + Host::chunk - 1) / Host::chunk && queued < Host::high; ++block) {
         float pcm[Host::chunk * 2]{};
-        if (render_frames(pcm, Host::chunk) != Host::chunk) { host.error = 3; return; }
+        const int frames = std::min(Host::chunk, Host::high - queued);
+        if (render_frames(pcm, frames) != frames) { host.error = 3; return; }
         double energy = 0;
-        for (auto& sample : pcm) { sample = std::clamp(sample, -1.f, 1.f); energy += double(sample) * sample; }
-        host.rms = std::sqrt(energy / (Host::chunk * 2));
-        if (!SDL_PutAudioStreamData(host.stream, pcm, sizeof(pcm))) { host.error = 4; return; }
+        for (int i = 0; i < frames * 2; ++i) { auto& sample = pcm[i]; sample = std::clamp(sample, -1.f, 1.f); energy += double(sample) * sample; }
+        host.rms = std::sqrt(energy / (frames * 2));
+        if (!SDL_PutAudioStreamData(host.stream, pcm, frames * 8)) { host.error = 4; return; }
         ++host.pumps;
-        host.mixed_frames += Host::chunk;
-        queued += Host::chunk;
+        host.mixed_frames += frames;
+        queued += frames;
     }
     if (queued >= Host::high) { host.refilling = false; host.primed = true; }
 }
 
 void pause(bool paused) {
+    web_sfx::suspend(paused);
     if (!host.stream) { host.paused = paused; return; }
     if (host.paused == paused) return;
     host.paused = paused;

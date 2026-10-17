@@ -14,6 +14,7 @@
 #include "../platform/Time.hpp"
 #include "../platform/Audio.hpp"
 #include "../platform/Graphics.hpp"
+#include "HitboxDisplay.hpp"
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -68,6 +69,7 @@ void teardown(bool quit) {
 }
 }
 Session::~Session() {
+    th20::web::clear_hitbox_display();
     if (!open) return;
     open = false;
     teardown(true);
@@ -143,7 +145,7 @@ __attribute__((export_name("sdl_game_open"))) std::uint32_t sdl_game_open(std::u
     }
     return 0;
 }
-__attribute__((export_name("sdl_game_close"))) void sdl_game_close() { session.reset(); }
+__attribute__((export_name("sdl_game_close"))) void sdl_game_close() { th20::web::clear_hitbox_display();session.reset(); }
 __attribute__((export_name("sdl_game_language"))) std::uint32_t sdl_game_language() { return japanese ? 0 : 1; }
 
 __attribute__((export_name("application_save"))) void application_save(std::uint32_t) {

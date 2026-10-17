@@ -1,3 +1,4 @@
+#include "browser-gamepad-input.hpp"
 // SDL3 input host for the TH_SDL3 build, replacing DirectInput8/XInput/WinMM
 // and the WMI device query. Sources: launcher keyboard bridge (sdl_key), SDL
 // keyboard state, SDL gamepads (as DirectInput-kind devices) and the shared
@@ -20,9 +21,13 @@ namespace th20::source::gameplay { class GameController; extern GameController* 
 #include "../../../portable/input/MotionTrack.hpp"
 #include "TouchMotion.hpp"
 #include <SDL3/SDL.h>
+#include <emscripten.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+
+EM_JS(int, th20_browser_keyboard, (), { return typeof Module['resetBrowserKeyboard'] === 'function'; });
+EM_JS(void, th20_reset_browser_keyboard, (), { Module['resetBrowserKeyboard']?.(); });
 
 namespace th20::source::input {
 namespace {
@@ -105,16 +110,26 @@ touhou::input::TouchState touch_state() {
 
 // The SDL implementation is the Host definition on this platform (no base
 // win32 implementation exists here).
+int launcher_gamepad=-1;
 struct SdlHost : Host {
     BOOL keyboard(std::uint8_t* output) override {
         std::memcpy(output, synthetic_keys, 256);
-        const bool* physical = SDL_GetKeyboardState(nullptr);
+        const bool* physical = th20_browser_keyboard() ? nullptr : SDL_GetKeyboardState(nullptr);
         for (const auto& k : keyboard_map)
-            if ((k.native != SDL_SCANCODE_UNKNOWN && physical[k.native]) || k.hosted) {
+            if ((physical && k.native != SDL_SCANCODE_UNKNOWN && physical[k.native]) || k.hosted) {
                 press(output, k.vk);
                 if (k.vk >= 160 && k.vk <= 165) press(output, 16 + (k.vk - 160) / 2);
             }
         for (int vk = 0; vk < 256; ++vk) if (touch_keys[vk]) press(output, std::uint32_t(vk));
+        // Resolve actions through the current native keyboard bindings too.
+        // Otherwise a customized Z/X binding could change the action's meaning.
+        if(launcher_gamepad>=0&&controller){
+            for(unsigned n=0;n<8;++n)if(launcher_gamepad&(1<<n)){
+                const auto vk=controller->mappings[0].keyboard[n];
+                if(vk&&vk<256)press(output,vk);
+            }
+            eagler::input::ApplyGamepadVirtualKeys(output,launcher_gamepad&~255);
+        }else eagler::input::ApplyGamepadVirtualKeys(output,launcher_gamepad);
         return TRUE;
     }
     BOOL set_keyboard(std::uint8_t* input) override {
@@ -133,6 +148,7 @@ struct SdlHost : Host {
     HRESULT poll(IDirectInputDevice8W*) override { return S_OK; }
     HRESULT acquire(IDirectInputDevice8W*) override { return S_OK; }
     HRESULT device_state(IDirectInputDevice8W* device, DIJOYSTATE2* output) override {
+        if(launcher_gamepad>=0)return DIERR_INPUTLOST;
         const int index = pad_index(device);
         if (index < 0 || index >= 4 || !pads[index] || !SDL_GamepadConnected(pads[index])) return DIERR_INPUTLOST;
         auto* pad = pads[index];
@@ -194,16 +210,18 @@ bool sdl_replay_input_locked() {
 
 int read_scan_keyboard(std::uint8_t* output) {
     std::memset(output, 0, 256);
-    const bool* physical = SDL_GetKeyboardState(nullptr);
+    const bool* physical = th20_browser_keyboard() ? nullptr : SDL_GetKeyboardState(nullptr);
     for (const auto& key : keyboard_map)
-        if (key.scan < 256 && ((key.native != SDL_SCANCODE_UNKNOWN && physical[key.native]) || key.hosted))
+        if (key.scan < 256 && ((physical && key.native != SDL_SCANCODE_UNKNOWN && physical[key.native]) || key.hosted))
             output[key.scan] = 0x80;
+    eagler::input::ApplyGamepadScanKeys(output,launcher_gamepad);
     return 1;
 }
 
 // Called once per game tick by the frame loop (the sdl_native_input role).
 void sample_native_input() {
     pump_events();
+    launcher_gamepad=eagler::input::BrowserGamepadState();
     ++sample_ticks;
     const auto state = touch_state();
     if (state.context == 3) {
@@ -318,6 +336,8 @@ __attribute__((export_name("sdl_key"))) void sdl_key(const char* code, std::uint
         if (!std::strcmp(code, k.code)) { k.hosted = down != 0; return; }
 }
 __attribute__((export_name("sdl_keys_clear"))) void sdl_keys_clear() {
+    th20_reset_browser_keyboard();
+    SDL_ResetKeyboard();
     for (auto& k : th20::source::input::keyboard_map) k.hosted = false;
     std::memset(th20::source::input::synthetic_keys, 0, sizeof(th20::source::input::synthetic_keys));
     th20::source::input::gestures.reset();

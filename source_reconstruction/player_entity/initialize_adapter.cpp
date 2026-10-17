@@ -9,6 +9,9 @@
 #include "../sprite_renderer/dispatch.hpp"
 #include "../damage_regions/regions.hpp"
 #include "../item_system/collect.hpp"
+#ifdef TH_SDL3
+#include "../../../th20_web/cpp/sdl/HitboxDisplay.hpp"
+#endif
 namespace th20::source::player_entity {
 namespace {
 class GameInitializationServices final:public InitializationServices {
@@ -30,13 +33,20 @@ public:
 InitializationServices& initialization_services(){static GameInitializationServices services;return services;}
 Player* create_player(int index){return create_player(index,player_services(),initialization_services());}
 void destroy_player(int index){
+#ifdef TH_SDL3
+    web::clear_hitbox_display();
+#endif
     auto& context=game_session::context(index);if(context.object_28){runtime::retire_callback_owner(static_cast<damage::HitCtrlInf*>(context.object_28));context.object_28=nullptr;}
     if(context.objects_04[0]){runtime::retire_callback_owner(static_cast<Player*>(context.objects_04[0]));context.objects_04[0]=nullptr;}
 }
 int draw_player(Player& player){
     if(player.state!=2){auto& controller=*program_entry::sprite_controller;sprite::configure_animation_layer(controller,12,player.view_index);
         player.animation.vector_5bc=player.position_614;player.animation.base.flags[2]=(player.animation.base.flags[2]&0xfcffffffu)|0x01000000u;
-        sprite::draw_animation(controller,player.animation);sprite::flush_textured_quads(controller,*program_entry::graphics_state.device);
+        sprite::draw_animation(controller,player.animation);
+#ifdef TH_SDL3
+        web::draw_always_hitbox(player);
+#endif
+        sprite::flush_textured_quads(controller,*program_entry::graphics_state.device);
     }
     return 1;
 }
