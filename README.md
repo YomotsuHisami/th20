@@ -1,3 +1,9 @@
+> **已归档 | Archived**
+>
+> 本 `eagler` 分支已归档。当前 Web 接入与维护入口见 [eagler-touhou/launcher/web](https://github.com/YomotsuHisami/eagler-touhou/tree/launcher-refactor/launcher/web)。
+
+---
+
 # 东方锦上京 TH20 · 独立 C++ 源码重建
 
 基于《东方锦上京 ～ Fossilized Wonders.》Windows 版恢复的 C++ 游戏工程。**当前已具备整套可独立构建的源码，完整游戏目标已编译、链接并实际运行。** 源码覆盖引擎、关卡脚本执行、自机与敌机、弹幕、渲染、音频、菜单、录像、存档和结局场景。
